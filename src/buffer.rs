@@ -719,6 +719,27 @@ impl Buffer {
             }
         }
     }
+    #[cfg(feature = "swash")]
+    pub fn get_image_size(&self,font_system: &mut FontSystem, cache: &mut crate::SwashCache) -> (u32, u32) {
+        let mut max_width = 0;
+        let mut max_height = 0;
+        for run in self.layout_runs() {
+            for glyph in run.glyphs.iter() {
+                let (cache_key, x_int, y_int) = (glyph.cache_key, glyph.x_int, glyph.y_int);
+                if let Some(image) = cache.get_image(font_system, cache_key) {
+                    max_width = max_width.max(
+                        image.placement.width
+                            + (run.line_y as i32 + image.placement.left + x_int).max(0) as u32,
+                    );
+                    max_height = max_height.max(
+                        image.placement.height
+                            + (run.line_y as i32 + image.placement.top + y_int).max(0) as u32,
+                    );
+                }
+            }
+        }
+        (max_width, max_height)
+    }
 }
 
 impl<'a> BorrowedWithFontSystem<'a, Buffer> {

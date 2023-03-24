@@ -41,8 +41,3 @@ std = [
   "unicode-bidi/std",
 ]
 vi = ["syntect"]
-
-[workspace]
-members = [
-  "examples/*",
-]
