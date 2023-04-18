@@ -733,11 +733,11 @@ impl Buffer {
                 if let Some(image) = cache.get_image(font_system, cache_key) {
                     max_width = max_width.max(
                         image.placement.width
-                            + (run.line_y as i32 + abs(image.placement.left) + x_int).max(0) as u32,
+                            + (run.line_y as i32 + image.placement.left.abs() + x_int).max(0) as u32,
                     );
                     max_height = max_height.max(
                         image.placement.height
-                            + (run.line_y as i32 + abs(image.placement.top) + y_int).max(0) as u32,
+                            + (run.line_y as i32 + image.placement.top.abs() + y_int).max(0) as u32,
                     );
                 }
             }
