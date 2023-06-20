@@ -732,8 +732,7 @@ impl Buffer {
                 let (cache_key, x_int, y_int) = (glyph.cache_key, glyph.x_int, glyph.y_int);
                 if let Some(image) = cache.get_image(font_system, cache_key) {
                     max_width = max_width.max(
-                        image.placement.width
-                            + (run.line_y as i32 + image.placement.left.abs() + x_int).max(0) as u32,
+                        image.placement.width + (image.placement.left.abs() + x_int).max(0) as u32,
                     );
                     max_height = max_height.max(
                         image.placement.height
@@ -743,6 +742,37 @@ impl Buffer {
             }
         }
         (max_width, max_height)
+    }
+
+    #[cfg(feature = "swash")]
+    pub fn get_outline_command_collection(
+        &self,
+        font_system: &mut FontSystem,
+        cache: &mut crate::SwashCache,
+    ) -> Vec<LinePathCommand> {
+        let mut result: Vec<LinePathCommand> = Default::default();
+        for run in self.layout_runs() {
+            let mut line: Vec<PathCommandWithOffset> = Default::default();
+            let mut min_x = i32::MAX;
+            let mut max_x = i32::MIN;
+            for glyph in run.glyphs.iter() {
+                let (cache_key, x_int, y_int, width) =
+                    (glyph.cache_key, glyph.x_int, glyph.y_int, glyph.w as i32);
+                if let Some(commands) = cache.get_outline_commands(font_system, cache_key) {
+                    min_x = min_x.min(x_int);
+                    max_x = max_x.max(x_int + width);
+                    let temp = generate_command_with_offset(commands, x_int, y_int, width);
+                    line.push(temp);
+                }
+            }
+            result.push(LinePathCommand {
+                paths: line,
+                x_init: min_x,
+                y_init: run.line_y as i32,
+                width: max_x - min_x,
+            });
+        }
+        result
     }
 }
 
@@ -803,5 +833,35 @@ impl<'a> BorrowedWithFontSystem<'a, Buffer> {
         F: FnMut(i32, i32, u32, u32, Color),
     {
         self.inner.draw(self.font_system, cache, color, f);
+    }
+}
+
+#[derive(Default)]
+pub struct PathCommandWithOffset {
+    pub path: Vec<swash::zeno::Command>,
+    pub x_offset: i32,
+    pub y_offset: i32,
+    pub width: i32,
+}
+
+#[derive(Default)]
+pub struct LinePathCommand {
+    pub paths: Vec<PathCommandWithOffset>,
+    pub x_init: i32,
+    pub y_init: i32,
+    pub width: i32,
+}
+
+pub fn generate_command_with_offset(
+    commands: &[swash::zeno::Command],
+    x_offset: i32,
+    y_offset: i32,
+    width: i32,
+) -> PathCommandWithOffset {
+    PathCommandWithOffset {
+        path: commands.to_vec(),
+        x_offset,
+        y_offset,
+        width,
     }
 }
