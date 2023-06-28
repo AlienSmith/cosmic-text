@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use std::collections::HashMap as Map;
 use swash::scale::{image::Content, ScaleContext};
 use swash::scale::{Render, Source, StrikeWith};
-use swash::zeno::{Format, Vector};
+use swash::zeno::{Format, Transform, Vector};
 
 use crate::{CacheKey, Color, FontSystem};
 
@@ -40,20 +40,33 @@ fn swash_image(
     let offset = Vector::new(cache_key.x_bin.as_float(), cache_key.y_bin.as_float());
 
     // Select our source order
-    Render::new(&[
+    let mut renderer = Render::new(&[
         // Color outline with the first palette
         Source::ColorOutline(0),
         // Color bitmap with best fit selection mode
         Source::ColorBitmap(StrikeWith::BestFit),
         // Standard scalable outline
         Source::Outline,
-    ])
+    ]);
+    let mut renderer_ref = &mut renderer;
     // Select a subpixel format
-    .format(Format::Alpha)
-    // Apply the fractional offset
-    .offset(offset)
+    renderer_ref
+        .format(Format::Alpha)
+        // Apply the fractional offset
+        .offset(offset);
+    if cache_key.hard_oblique {
+        renderer_ref = renderer_ref.transform(Some(Transform {
+            xx: 1.0,
+            yx: 0.3,
+            yy: 1.0,
+            ..Default::default()
+        }));
+    }
+    if cache_key.hard_bolded {
+        renderer_ref = renderer_ref.embolden(1.0);
+    }
     // Render the image
-    .render(&mut scaler, cache_key.glyph_id)
+    renderer_ref.render(&mut scaler, cache_key.glyph_id)
 }
 
 fn swash_outline_commands(

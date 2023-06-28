@@ -13,6 +13,10 @@ pub struct CacheKey {
     pub x_bin: SubpixelBin,
     /// Binning of fractional Y offset
     pub y_bin: SubpixelBin,
+
+    pub hard_oblique: bool,
+
+    pub hard_bolded: bool,
 }
 
 impl CacheKey {
@@ -21,6 +25,8 @@ impl CacheKey {
         glyph_id: u16,
         font_size: f32,
         pos: (f32, f32),
+        hard_oblique: bool,
+        hard_bolded: bool,
     ) -> (Self, i32, i32) {
         let (x, x_bin) = SubpixelBin::new(pos.0);
         let (y, y_bin) = SubpixelBin::new(pos.1);
@@ -31,6 +37,8 @@ impl CacheKey {
                 font_size_bits: font_size.to_bits(),
                 x_bin,
                 y_bin,
+                hard_oblique,
+                hard_bolded,
             },
             x,
             y,

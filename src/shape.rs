@@ -65,6 +65,8 @@ fn shape_fallback(
             glyph_id: info.glyph_id.try_into().expect("failed to cast glyph ID"),
             //TODO: color should not be related to shaping
             color_opt: attrs.color_opt,
+            hard_oblique: attrs.hard_oblique,
+            hard_bolded: attrs.hard_bolded,
             metadata: attrs.metadata,
         });
     }
@@ -224,6 +226,8 @@ pub struct ShapeGlyph {
     pub font_id: fontdb::ID,
     pub glyph_id: u16,
     pub color_opt: Option<Color>,
+    pub hard_oblique: bool,
+    pub hard_bolded: bool,
     pub metadata: usize,
 }
 
@@ -244,6 +248,8 @@ impl ShapeGlyph {
             self.glyph_id,
             font_size,
             (x + x_offset, y - y_offset),
+            self.hard_oblique,
+            self.hard_bolded,
         );
         LayoutGlyph {
             start: self.start,

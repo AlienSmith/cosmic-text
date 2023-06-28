@@ -97,6 +97,8 @@ pub struct Attrs<'a> {
     pub stretch: Stretch,
     pub style: Style,
     pub weight: Weight,
+    pub hard_oblique: bool,
+    pub hard_bolded: bool,
     pub metadata: usize,
 }
 
@@ -112,6 +114,8 @@ impl<'a> Attrs<'a> {
             stretch: Stretch::Normal,
             style: Style::Normal,
             weight: Weight::NORMAL,
+            hard_oblique: false,
+            hard_bolded: false,
             metadata: 0,
         }
     }
@@ -175,6 +179,8 @@ impl<'a> Attrs<'a> {
             && self.stretch == other.stretch
             && self.style == other.style
             && self.weight == other.weight
+            && self.hard_bolded == other.hard_bolded
+            && self.hard_oblique == other.hard_oblique
     }
 }
 
@@ -189,6 +195,8 @@ pub struct AttrsOwned {
     pub style: Style,
     pub weight: Weight,
     pub metadata: usize,
+    pub hard_oblique: bool,
+    pub hard_bolded: bool,
 }
 
 impl AttrsOwned {
@@ -201,6 +209,8 @@ impl AttrsOwned {
             style: attrs.style,
             weight: attrs.weight,
             metadata: attrs.metadata,
+            hard_oblique: attrs.hard_oblique,
+            hard_bolded: attrs.hard_bolded,
         }
     }
 
@@ -213,6 +223,8 @@ impl AttrsOwned {
             style: self.style,
             weight: self.weight,
             metadata: self.metadata,
+            hard_oblique: self.hard_oblique,
+            hard_bolded: self.hard_bolded,
         }
     }
 }
