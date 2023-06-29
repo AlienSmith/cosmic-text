@@ -91,9 +91,23 @@ fn swash_outline_commands(
         .build();
 
     // Scale the outline
-    let outline = scaler
+    let mut outline = scaler
         .scale_outline(cache_key.glyph_id)
         .or_else(|| scaler.scale_color_outline(cache_key.glyph_id))?;
+
+
+    if cache_key.hard_oblique {
+        outline.embolden(1.0, 1.0);
+    }
+
+    if cache_key.hard_bolded {
+        outline.transform(&Transform {
+            xx: 1.0,
+            yx: 0.3,
+            yy: 1.0,
+            ..Default::default()
+        });
+    }
 
     // Get the path information of the outline
     let path = outline.path();
