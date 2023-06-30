@@ -55,6 +55,7 @@ fn swash_image(
         .format(Format::Alpha)
         // Apply the fractional offset
         .offset(offset);
+
     if cache_key.hard_oblique {
         renderer_ref = renderer_ref.transform(Some(Transform {
             xx: 1.0,
@@ -99,17 +100,17 @@ fn swash_outline_commands(
         .scale_outline(cache_key.glyph_id)
         .or_else(|| scaler.scale_color_outline(cache_key.glyph_id))?;
 
+    
     if cache_key.hard_oblique {
-        outline.embolden(strength, strength);
-    }
-
-    if cache_key.hard_bolded {
         outline.transform(&Transform {
             xx: 1.0,
             yx: 0.3,
             yy: 1.0,
             ..Default::default()
         });
+    }
+    if cache_key.hard_bolded {
+        outline.embolden(strength, strength);
     }
 
     // Get the path information of the outline
