@@ -4,12 +4,17 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{Attrs, AttrsOwned, Font};
 
+pub struct VagueFontMatchResult {
+    pub id: fontdb::ID,
+    pub need_embolden: bool,
+}
+
 /// Access system fonts
 pub struct FontSystem {
     locale: String,
     db: fontdb::Database,
     font_cache: HashMap<fontdb::ID, Option<Arc<Font>>>,
-    font_matches_cache: HashMap<AttrsOwned, Arc<Vec<fontdb::ID>>>,
+    font_matches_cache: HashMap<AttrsOwned, Arc<Vec<VagueFontMatchResult>>>,
 }
 
 impl FontSystem {
@@ -92,20 +97,23 @@ impl FontSystem {
         get_font(&mut self.font_cache, &mut self.db, id)
     }
 
-    pub fn get_font_matches(&mut self, attrs: Attrs) -> Arc<Vec<fontdb::ID>> {
+    pub fn get_font_matches(&mut self, attrs: Attrs) -> Arc<Vec<VagueFontMatchResult>> {
         self.font_matches_cache
             //TODO: do not create AttrsOwned unless entry does not already exist
             .entry(AttrsOwned::new(attrs))
             .or_insert_with(|| {
                 #[cfg(not(target_arch = "wasm32"))]
                 let now = std::time::Instant::now();
-
-                let ids = self
-                    .db
-                    .faces()
-                    .filter(|face| attrs.matches(face))
-                    .map(|face| face.id)
-                    .collect::<Vec<_>>();
+                let mut result: Vec<VagueFontMatchResult> = Default::default();
+                for face in self.db.faces() {
+                    let temp = attrs.vague_matches(face);
+                    if temp.viable {
+                        result.push(VagueFontMatchResult {
+                            id: face.id,
+                            need_embolden: temp.need_embolden,
+                        });
+                    }
+                }
 
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -113,7 +121,7 @@ impl FontSystem {
                     log::debug!("font matches for {:?} in {:?}", attrs, elapsed);
                 }
 
-                Arc::new(ids)
+                Arc::new(result)
             })
             .clone()
     }

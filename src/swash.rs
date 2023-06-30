@@ -27,7 +27,8 @@ fn swash_image(
             return None;
         }
     };
-
+    let font_size = f32::from_bits(cache_key.font_size_bits);
+    let strength = font_size / 40.0;
     // Build the scaler
     let mut scaler = context
         .builder(font.as_swash())
@@ -63,7 +64,7 @@ fn swash_image(
         }));
     }
     if cache_key.hard_bolded {
-        renderer_ref = renderer_ref.embolden(1.0);
+        renderer_ref = renderer_ref.embolden(strength);
     }
     // Render the image
     renderer_ref.render(&mut scaler, cache_key.glyph_id)
@@ -84,6 +85,9 @@ fn swash_outline_commands(
         }
     };
 
+    let font_size = f32::from_bits(cache_key.font_size_bits);
+    let strength = font_size / 40.0;
+
     // Build the scaler
     let mut scaler = context
         .builder(font.as_swash())
@@ -95,9 +99,8 @@ fn swash_outline_commands(
         .scale_outline(cache_key.glyph_id)
         .or_else(|| scaler.scale_color_outline(cache_key.glyph_id))?;
 
-
     if cache_key.hard_oblique {
-        outline.embolden(1.0, 1.0);
+        outline.embolden(strength, strength);
     }
 
     if cache_key.hard_bolded {

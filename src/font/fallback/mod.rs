@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use fontdb::Family;
 use unicode_script::Script;
 
-use crate::{Font, FontSystem};
+use crate::{Font, FontSystem, VagueFontMatchResult};
 
 use self::platform::*;
 
@@ -26,9 +26,14 @@ mod platform;
 #[path = "windows.rs"]
 mod platform;
 
+pub struct FontInfo {
+    pub font: Arc<Font>,
+    pub need_embolden: bool,
+}
+
 pub struct FontFallbackIter<'a> {
     font_system: &'a mut FontSystem,
-    font_ids: &'a [fontdb::ID],
+    font_ids: &'a [VagueFontMatchResult],
     default_families: &'a [&'a Family<'a>],
     default_i: usize,
     scripts: Vec<Script>,
@@ -41,7 +46,7 @@ pub struct FontFallbackIter<'a> {
 impl<'a> FontFallbackIter<'a> {
     pub fn new(
         font_system: &'a mut FontSystem,
-        font_ids: &'a [fontdb::ID],
+        font_ids: &'a [VagueFontMatchResult],
         default_families: &'a [&'a Family<'a>],
         scripts: Vec<Script>,
     ) -> Self {
@@ -71,7 +76,7 @@ impl<'a> FontFallbackIter<'a> {
                 "Failed to find preset fallback for {:?} locale '{}', used '{}': '{}'",
                 self.scripts,
                 self.font_system.locale(),
-                self.face_name(self.font_ids[self.other_i - 1]),
+                self.face_name(self.font_ids[self.other_i - 1].id),
                 word
             );
         } else if !self.scripts.is_empty() && self.common_i > 0 {
@@ -108,7 +113,7 @@ impl<'a> FontFallbackIter<'a> {
 }
 
 impl<'a> Iterator for FontFallbackIter<'a> {
-    type Item = Arc<Font>;
+    type Item = FontInfo;
     fn next(&mut self) -> Option<Self::Item> {
         while self.default_i < self.default_families.len() {
             self.default_i += 1;
@@ -117,9 +122,12 @@ impl<'a> Iterator for FontFallbackIter<'a> {
                     .font_system
                     .db()
                     .family_name(self.default_families[self.default_i - 1]);
-                if self.face_contains_family(*id, default_family) {
-                    if let Some(font) = self.font_system.get_font(*id) {
-                        return Some(font);
+                if self.face_contains_family(id.id, default_family) {
+                    if let Some(font) = self.font_system.get_font(id.id) {
+                        return Some(FontInfo {
+                            font,
+                            need_embolden: id.need_embolden,
+                        });
                     }
                 }
             }
@@ -133,9 +141,12 @@ impl<'a> Iterator for FontFallbackIter<'a> {
                 let script_family = script_families[self.script_i.1];
                 self.script_i.1 += 1;
                 for id in self.font_ids.iter() {
-                    if self.face_contains_family(*id, script_family) {
-                        if let Some(font) = self.font_system.get_font(*id) {
-                            return Some(font);
+                    if self.face_contains_family(id.id, script_family) {
+                        if let Some(font) = self.font_system.get_font(id.id) {
+                            return Some(FontInfo {
+                                font,
+                                need_embolden: id.need_embolden,
+                            });
                         }
                     }
                 }
@@ -156,9 +167,12 @@ impl<'a> Iterator for FontFallbackIter<'a> {
             let common_family = common_families[self.common_i];
             self.common_i += 1;
             for id in self.font_ids.iter() {
-                if self.face_contains_family(*id, common_family) {
-                    if let Some(font) = self.font_system.get_font(*id) {
-                        return Some(font);
+                if self.face_contains_family(id.id, common_family) {
+                    if let Some(font) = self.font_system.get_font(id.id) {
+                        return Some(FontInfo {
+                            font,
+                            need_embolden: id.need_embolden,
+                        });
                     }
                 }
             }
@@ -169,14 +183,18 @@ impl<'a> Iterator for FontFallbackIter<'a> {
         //TODO: do not evaluate fonts more than once!
         let forbidden_families = forbidden_fallback();
         while self.other_i < self.font_ids.len() {
-            let id = self.font_ids[self.other_i];
+            let id = self.font_ids[self.other_i].id;
+            let need_embolden = self.font_ids[self.other_i].need_embolden;
             self.other_i += 1;
             if forbidden_families
                 .iter()
                 .all(|family_name| !self.face_contains_family(id, family_name))
             {
                 if let Some(font) = self.font_system.get_font(id) {
-                    return Some(font);
+                    return Some(FontInfo {
+                        font,
+                        need_embolden,
+                    });
                 }
             }
         }

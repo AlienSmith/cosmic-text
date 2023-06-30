@@ -86,6 +86,11 @@ impl FamilyOwned {
         }
     }
 }
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct VagueMatchResult {
+    pub viable: bool,
+    pub need_embolden: bool,
+}
 
 /// Text attributes
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -170,6 +175,35 @@ impl<'a> Attrs<'a> {
                 && face.weight == self.weight
                 && face.stretch == self.stretch
                 && face.monospaced == self.monospaced)
+    }
+
+    pub fn vague_matches(&self, face: &fontdb::FaceInfo) -> VagueMatchResult {
+        //TODO: smarter way of including emoji
+        if face.post_script_name.contains("Emoji") {
+            VagueMatchResult {
+                viable: true,
+                need_embolden: false,
+            }
+        } else if face.style == self.style
+            && face.stretch == self.stretch
+            && face.monospaced == self.monospaced
+        {
+            if face.weight == self.weight {
+                VagueMatchResult {
+                    viable: true,
+                    need_embolden: false,
+                }
+            } else if self.weight == Weight::BOLD {
+                VagueMatchResult {
+                    viable: true,
+                    need_embolden: face.weight != self.weight,
+                }
+            } else {
+                VagueMatchResult::default()
+            }
+        } else {
+            VagueMatchResult::default()
+        }
     }
 
     /// Check if this set of attributes can be shaped with another

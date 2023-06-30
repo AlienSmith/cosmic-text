@@ -18,6 +18,7 @@ fn shape_fallback(
     start_run: usize,
     end_run: usize,
     span_rtl: bool,
+    need_embolden: bool,
 ) -> (Vec<ShapeGlyph>, Vec<usize>) {
     let run = &line[start_run..end_run];
 
@@ -66,7 +67,7 @@ fn shape_fallback(
             //TODO: color should not be related to shaping
             color_opt: attrs.color_opt,
             hard_oblique: attrs.hard_oblique,
-            hard_bolded: attrs.hard_bolded,
+            hard_bolded: attrs.hard_bolded || need_embolden,
             metadata: attrs.metadata,
         });
     }
@@ -129,24 +130,38 @@ fn shape_run(
     let default_families = [&attrs.family];
     let mut font_iter = FontFallbackIter::new(font_system, &fonts, &default_families, scripts);
 
-    let font = font_iter.next().expect("no default font found");
+    let font_info = font_iter.next().expect("no default font found");
 
-    let (mut glyphs, mut missing) =
-        shape_fallback(&font, line, attrs_list, start_run, end_run, span_rtl);
+    let (mut glyphs, mut missing) = shape_fallback(
+        &font_info.font,
+        line,
+        attrs_list,
+        start_run,
+        end_run,
+        span_rtl,
+        font_info.need_embolden,
+    );
 
     //TODO: improve performance!
     while !missing.is_empty() {
-        let font = match font_iter.next() {
+        let font_info = match font_iter.next() {
             Some(some) => some,
             None => break,
         };
 
         log::trace!(
             "Evaluating fallback with font '{}'",
-            font_iter.face_name(font.id())
+            font_iter.face_name(font_info.font.id())
         );
-        let (mut fb_glyphs, fb_missing) =
-            shape_fallback(&font, line, attrs_list, start_run, end_run, span_rtl);
+        let (mut fb_glyphs, fb_missing) = shape_fallback(
+            &font_info.font,
+            line,
+            attrs_list,
+            start_run,
+            end_run,
+            span_rtl,
+            font_info.need_embolden,
+        );
 
         // Insert all matching glyphs
         let mut fb_i = 0;
