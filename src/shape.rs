@@ -341,6 +341,7 @@ fn shape_skip(
 
     let font = font_iter.next().expect("no default font found");
     let font_id = font.font.id();
+    let need_embolden = font.need_embolden;
     let font = font.font.as_swash();
 
     let charmap = font.charmap();
@@ -370,8 +371,8 @@ fn shape_skip(
                     font_id,
                     glyph_id,
                     color_opt: attrs.color_opt,
-                    hard_oblique: false,
-                    hard_bolded: false,
+                    hard_oblique: attrs.hard_oblique,
+                    hard_bolded: attrs.hard_bolded || need_embolden,
                     metadata: attrs.metadata,
                 }
             }),
