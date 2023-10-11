@@ -8,16 +8,13 @@ use cosmic::{
     },
     settings,
     theme::{self, Theme, ThemeType},
-    widget::{button, toggler},
+    widget::{button, text, toggler},
     Element,
 };
 use cosmic_text::{
     Align, Attrs, AttrsList, Buffer, Edit, FontSystem, Metrics, SyntaxEditor, SyntaxSystem, Wrap,
 };
 use std::{env, fmt, fs, path::PathBuf, sync::Mutex};
-
-use self::text::text;
-mod text;
 
 use self::text_box::text_box;
 mod text_box;
@@ -134,9 +131,7 @@ impl Application for Window {
     type Theme = Theme;
 
     fn new(_flags: ()) -> (Self, Command<Self::Message>) {
-        let attrs = cosmic_text::Attrs::new()
-            .monospaced(true)
-            .family(cosmic_text::Family::Monospace);
+        let attrs = cosmic_text::Attrs::new().family(cosmic_text::Family::Monospace);
 
         let mut editor = SyntaxEditor::new(
             Buffer::new(
@@ -167,7 +162,7 @@ impl Application for Window {
     }
 
     fn theme(&self) -> Theme {
-        self.theme
+        self.theme.clone()
     }
 
     fn title(&self) -> String {
@@ -228,14 +223,11 @@ impl Application for Window {
                 update_attrs(&mut *editor, self.attrs);
             }
             Message::Monospaced(monospaced) => {
-                self.attrs = self
-                    .attrs
-                    .family(if monospaced {
-                        cosmic_text::Family::Monospace
-                    } else {
-                        cosmic_text::Family::SansSerif
-                    })
-                    .monospaced(monospaced);
+                self.attrs = self.attrs.family(if monospaced {
+                    cosmic_text::Family::Monospace
+                } else {
+                    cosmic_text::Family::SansSerif
+                });
 
                 let mut editor = self.editor.lock().unwrap();
                 update_attrs(&mut *editor, self.attrs);
@@ -276,6 +268,14 @@ impl Application for Window {
                 ));
 
                 let mut editor = self.editor.lock().unwrap();
+
+                #[cfg(not(feature = "vi"))]
+                // Update the syntax color theme
+                match theme {
+                    "Light" => editor.update_theme("base16-ocean.light"),
+                    "Dark" | _ => editor.update_theme("base16-eighties.dark"),
+                };
+
                 update_attrs(&mut *editor, self.attrs);
             }
         }
@@ -334,7 +334,11 @@ impl Application for Window {
                     Message::Italic
                 ),
                 text("Monospaced:"),
-                toggler(None, self.attrs.monospaced, Message::Monospaced),
+                toggler(
+                    None,
+                    self.attrs.family == cosmic_text::Family::Monospace,
+                    Message::Monospaced
+                ),
                 text("Theme:"),
                 theme_picker,
                 text("Font Size:"),

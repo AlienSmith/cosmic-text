@@ -11,7 +11,7 @@ pub use fontdb::{Family, Stretch, Style, Weight};
 use rangemap::RangeMap;
 
 /// Text color
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, Eq, Hash, PartialEq)]
 pub struct Color(pub u32);
 
 impl Color {
@@ -25,6 +25,18 @@ impl Color {
     #[inline]
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self(((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+    }
+
+    /// Get a tuple over all of the attributes, in `(r, g, b, a)` order.
+    #[inline]
+    pub fn as_rgba_tuple(self) -> (u8, u8, u8, u8) {
+        (self.r(), self.g(), self.b(), self.a())
+    }
+
+    /// Get an array over all of the components, in `[r, g, b, a]` order.
+    #[inline]
+    pub fn as_rgba(self) -> [u8; 4] {
+        [self.r(), self.g(), self.b(), self.a()]
     }
 
     /// Get the red component
@@ -86,7 +98,7 @@ impl FamilyOwned {
         }
     }
 }
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct VagueMatchResult {
     pub viable: bool,
     pub need_embolden: bool,
@@ -98,7 +110,6 @@ pub struct Attrs<'a> {
     //TODO: should this be an option?
     pub color_opt: Option<Color>,
     pub family: Family<'a>,
-    pub monospaced: bool,
     pub stretch: Stretch,
     pub style: Style,
     pub weight: Weight,
@@ -115,7 +126,6 @@ impl<'a> Attrs<'a> {
         Self {
             color_opt: None,
             family: Family::SansSerif,
-            monospaced: false,
             stretch: Stretch::Normal,
             style: Style::Normal,
             weight: Weight::NORMAL,
@@ -134,12 +144,6 @@ impl<'a> Attrs<'a> {
     /// Set [Family]
     pub fn family(mut self, family: Family<'a>) -> Self {
         self.family = family;
-        self
-    }
-
-    /// Set monospaced
-    pub fn monospaced(mut self, monospaced: bool) -> Self {
-        self.monospaced = monospaced;
         self
     }
 
@@ -173,8 +177,7 @@ impl<'a> Attrs<'a> {
         face.post_script_name.contains("Emoji")
             || (face.style == self.style
                 && face.weight == self.weight
-                && face.stretch == self.stretch
-                && face.monospaced == self.monospaced)
+                && face.stretch == self.stretch)
     }
 
     pub fn vague_matches(&self, face: &fontdb::FaceInfo) -> VagueMatchResult {
@@ -186,7 +189,6 @@ impl<'a> Attrs<'a> {
             }
         } else if face.style == self.style
             && face.stretch == self.stretch
-            && face.monospaced == self.monospaced
         {
             if face.weight == self.weight {
                 VagueMatchResult {
@@ -209,7 +211,6 @@ impl<'a> Attrs<'a> {
     /// Check if this set of attributes can be shaped with another
     pub fn compatible(&self, other: &Self) -> bool {
         self.family == other.family
-            && self.monospaced == other.monospaced
             && self.stretch == other.stretch
             && self.style == other.style
             && self.weight == other.weight
@@ -224,7 +225,6 @@ pub struct AttrsOwned {
     //TODO: should this be an option?
     pub color_opt: Option<Color>,
     pub family_owned: FamilyOwned,
-    pub monospaced: bool,
     pub stretch: Stretch,
     pub style: Style,
     pub weight: Weight,
@@ -238,7 +238,6 @@ impl AttrsOwned {
         Self {
             color_opt: attrs.color_opt,
             family_owned: FamilyOwned::new(attrs.family),
-            monospaced: attrs.monospaced,
             stretch: attrs.stretch,
             style: attrs.style,
             weight: attrs.weight,
@@ -252,7 +251,6 @@ impl AttrsOwned {
         Attrs {
             color_opt: self.color_opt,
             family: self.family_owned.as_family(),
-            monospaced: self.monospaced,
             stretch: self.stretch,
             style: self.style,
             weight: self.weight,
@@ -265,7 +263,7 @@ impl AttrsOwned {
 
 /// List of text attributes to apply to a line
 //TODO: have this clean up the spans when changes are made
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct AttrsList {
     defaults: AttrsOwned,
     spans: RangeMap<usize, AttrsOwned>,

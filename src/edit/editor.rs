@@ -12,9 +12,11 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::Color;
 use crate::{
     Action, Affinity, AttrsList, Buffer, BufferLine, Cursor, Edit, FontSystem, LayoutCursor,
+    Shaping,
 };
 
 /// A wrapper of [`Buffer`] for easy editing
+#[derive(Debug)]
 pub struct Editor {
     buffer: Buffer,
     cursor: Cursor,
@@ -83,6 +85,10 @@ impl Edit for Editor {
         self.cursor
     }
 
+    fn set_cursor(&mut self, cursor: Cursor) {
+        self.cursor = cursor;
+    }
+
     fn select_opt(&self) -> Option<Cursor> {
         self.select_opt
     }
@@ -103,7 +109,7 @@ impl Edit for Editor {
         }
     }
 
-    fn copy_selection(&mut self) -> Option<String> {
+    fn copy_selection(&self) -> Option<String> {
         let select = self.select_opt?;
 
         let (start, end) = match select.line.cmp(&self.cursor.line) {
@@ -229,8 +235,12 @@ impl Edit for Editor {
         let after_len = after.text().len();
 
         // Collect attributes
-        let mut final_attrs = attrs_list
-            .unwrap_or_else(|| AttrsList::new(line.attrs_list().get_span(line.text().len())));
+        let mut final_attrs = attrs_list.unwrap_or_else(|| {
+            AttrsList::new(
+                line.attrs_list()
+                    .get_span(self.cursor.index.saturating_sub(1)),
+            )
+        });
 
         // Append the inserted text, line by line
         // we want to see a blank entry if the string ends with a newline
@@ -245,6 +255,7 @@ impl Edit for Editor {
                     .strip_suffix(char::is_control)
                     .unwrap_or(data_line),
                 these_attrs,
+                Shaping::Advanced,
             ));
         } else {
             panic!("str::lines() did not yield any elements");
@@ -256,6 +267,7 @@ impl Edit for Editor {
                     .strip_suffix(char::is_control)
                     .unwrap_or(data_line),
                 final_attrs.split_off(remaining_split_len),
+                Shaping::Advanced,
             );
             tmp.append(after);
             self.buffer.lines.insert(insert_line, tmp);
@@ -270,6 +282,7 @@ impl Edit for Editor {
                     .strip_suffix(char::is_control)
                     .unwrap_or(data_line),
                 final_attrs.split_off(remaining_split_len),
+                Shaping::Advanced,
             );
             self.buffer.lines.insert(insert_line, tmp);
             self.cursor.line += 1;
@@ -279,6 +292,7 @@ impl Edit for Editor {
 
         // Append the text after insertion
         self.cursor.index = self.buffer.lines[self.cursor.line].text().len() - after_len;
+        self.cursor_moved = true;
     }
 
     fn action(&mut self, font_system: &mut FontSystem, action: Action) {
@@ -552,7 +566,9 @@ impl Edit for Editor {
 
                 if let Some(new_cursor) = self.buffer.hit(x as f32, y as f32) {
                     if new_cursor != self.cursor {
+                        let color = self.cursor.color;
                         self.cursor = new_cursor;
+                        self.cursor.color = color;
                         self.buffer.set_redraw(true);
                     }
                 }
@@ -565,7 +581,9 @@ impl Edit for Editor {
 
                 if let Some(new_cursor) = self.buffer.hit(x as f32, y as f32) {
                     if new_cursor != self.cursor {
+                        let color = self.cursor.color;
                         self.cursor = new_cursor;
+                        self.cursor.color = color;
                         self.buffer.set_redraw(true);
                     }
                 }
@@ -578,16 +596,14 @@ impl Edit for Editor {
             Action::PreviousWord => {
                 let line: &mut BufferLine = &mut self.buffer.lines[self.cursor.line];
                 if self.cursor.index > 0 {
-                    let mut prev_index = 0;
-                    for (i, _) in line.text().unicode_word_indices() {
-                        if i < self.cursor.index {
-                            prev_index = i;
-                        } else {
-                            break;
-                        }
-                    }
+                    self.cursor.index = line
+                        .text()
+                        .unicode_word_indices()
+                        .rev()
+                        .map(|(i, _)| i)
+                        .find(|&i| i < self.cursor.index)
+                        .unwrap_or(0);
 
-                    self.cursor.index = prev_index;
                     self.buffer.set_redraw(true);
                 } else if self.cursor.line > 0 {
                     self.cursor.line -= 1;
@@ -599,14 +615,14 @@ impl Edit for Editor {
             Action::NextWord => {
                 let line: &mut BufferLine = &mut self.buffer.lines[self.cursor.line];
                 if self.cursor.index < line.text().len() {
-                    for (i, word) in line.text().unicode_word_indices() {
-                        let i = i + word.len();
-                        if i > self.cursor.index {
-                            self.cursor.index = i;
-                            self.buffer.set_redraw(true);
-                            break;
-                        }
-                    }
+                    self.cursor.index = line
+                        .text()
+                        .unicode_word_indices()
+                        .map(|(i, word)| i + word.len())
+                        .find(|&i| i > self.cursor.index)
+                        .unwrap_or(line.text().len());
+
+                    self.buffer.set_redraw(true);
                 } else if self.cursor.line + 1 < self.buffer.lines.len() {
                     self.cursor.line += 1;
                     self.cursor.index = 0;
@@ -684,12 +700,12 @@ impl Edit for Editor {
     ) where
         F: FnMut(i32, i32, u32, u32, Color),
     {
-        let font_size = self.buffer.metrics().font_size;
         let line_height = self.buffer.metrics().line_height;
 
         for run in self.buffer.layout_runs() {
             let line_i = run.line_i;
             let line_y = run.line_y;
+            let line_top = run.line_top;
 
             let cursor_glyph_opt = |cursor: &Cursor| -> Option<(usize, f32)> {
                 if cursor.line == line_i {
@@ -767,7 +783,7 @@ impl Edit for Editor {
                             } else if let Some((min, max)) = range_opt.take() {
                                 f(
                                     min,
-                                    (line_y - font_size) as i32,
+                                    line_top as i32,
                                     cmp::max(0, max - min) as u32,
                                     line_height as u32,
                                     Color::rgba(color.r(), color.g(), color.b(), 0x33),
@@ -793,7 +809,7 @@ impl Edit for Editor {
                         }
                         f(
                             min,
-                            (line_y - font_size) as i32,
+                            line_top as i32,
                             cmp::max(0, max - min) as u32,
                             line_height as u32,
                             Color::rgba(color.r(), color.g(), color.b(), 0x33),
@@ -829,20 +845,37 @@ impl Edit for Editor {
                     },
                 };
 
-                f(x, (line_y - font_size) as i32, 1, line_height as u32, color);
+                f(
+                    x,
+                    line_top as i32,
+                    1,
+                    line_height as u32,
+                    self.cursor.color.unwrap_or(color),
+                );
             }
 
             for glyph in run.glyphs.iter() {
-                let (cache_key, x_int, y_int) = (glyph.cache_key, glyph.x_int, glyph.y_int);
+                let physical_glyph = glyph.physical((0., 0.), 1.0);
 
                 let glyph_color = match glyph.color_opt {
                     Some(some) => some,
                     None => color,
                 };
 
-                cache.with_pixels(font_system, cache_key, glyph_color, |x, y, color| {
-                    f(x_int + x, line_y as i32 + y_int + y, 1, 1, color);
-                });
+                cache.with_pixels(
+                    font_system,
+                    physical_glyph.cache_key,
+                    glyph_color,
+                    |x, y, color| {
+                        f(
+                            physical_glyph.x + x,
+                            line_y as i32 + physical_glyph.y + y,
+                            1,
+                            1,
+                            color,
+                        );
+                    },
+                );
             }
         }
     }

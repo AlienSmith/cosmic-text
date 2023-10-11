@@ -9,9 +9,10 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
 
 use crate::{
     Action, AttrsList, BorrowedWithFontSystem, Buffer, Color, Cursor, Edit, Editor, FontSystem,
-    Style, Weight, Wrap,
+    Shaping, Style, Weight, Wrap,
 };
 
+#[derive(Debug)]
 pub struct SyntaxSystem {
     pub syntax_set: SyntaxSet,
     pub theme_set: ThemeSet,
@@ -29,6 +30,7 @@ impl SyntaxSystem {
 }
 
 /// A wrapper of [`Editor`] with syntax highlighting provided by [`SyntaxSystem`]
+#[derive(Debug)]
 pub struct SyntaxEditor<'a> {
     editor: Editor,
     syntax_system: &'a SyntaxSystem,
@@ -60,6 +62,19 @@ impl<'a> SyntaxEditor<'a> {
         })
     }
 
+    /// Modifies the theme of the [`SyntaxEditor`], returning false if the theme is missing
+    pub fn update_theme(&mut self, theme_name: &str) -> bool {
+        if let Some(theme) = self.syntax_system.theme_set.themes.get(theme_name) {
+            self.theme = theme;
+            self.highlighter = Highlighter::new(theme);
+            self.syntax_cache.clear();
+
+            true
+        } else {
+            false
+        }
+    }
+
     /// Load text from a file, and also set syntax to the best option
     ///
     /// ## Errors
@@ -75,7 +90,9 @@ impl<'a> SyntaxEditor<'a> {
         let path = path.as_ref();
 
         let text = fs::read_to_string(path)?;
-        self.editor.buffer_mut().set_text(font_system, &text, attrs);
+        self.editor
+            .buffer_mut()
+            .set_text(font_system, &text, attrs, Shaping::Advanced);
 
         //TODO: re-use text
         self.syntax = match self.syntax_system.syntax_set.find_syntax_for_file(path) {
@@ -126,6 +143,10 @@ impl<'a> Edit for SyntaxEditor<'a> {
 
     fn cursor(&self) -> Cursor {
         self.editor.cursor()
+    }
+
+    fn set_cursor(&mut self, cursor: Cursor) {
+        self.editor.set_cursor(cursor);
     }
 
     fn select_opt(&self) -> Option<Cursor> {
@@ -229,7 +250,7 @@ impl<'a> Edit for SyntaxEditor<'a> {
         self.editor.shape_as_needed(font_system);
     }
 
-    fn copy_selection(&mut self) -> Option<String> {
+    fn copy_selection(&self) -> Option<String> {
         self.editor.copy_selection()
     }
 

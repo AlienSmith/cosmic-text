@@ -8,11 +8,9 @@ use alloc::{
 use core::{cmp, fmt};
 use unicode_segmentation::UnicodeSegmentation;
 
-#[cfg(feature = "swash")]
-use crate::Color;
 use crate::{
-    Attrs, AttrsList, BorrowedWithFontSystem, BufferLine, FontSystem, LayoutGlyph, LayoutLine,
-    ShapeLine, Wrap,
+    Attrs, AttrsList, BidiParagraphs, BorrowedWithFontSystem, BufferLine, Color, FontSystem,
+    LayoutGlyph, LayoutLine, ShapeBuffer, ShapeLine, Shaping, Wrap,
 };
 
 /// Current cursor location
@@ -25,6 +23,8 @@ pub struct Cursor {
     /// Whether to associate the cursor with the run before it or the run after it if placed at the
     /// boundary between two runs
     pub affinity: Affinity,
+    /// Cursor color
+    pub color: Option<Color>,
 }
 
 impl Cursor {
@@ -39,6 +39,16 @@ impl Cursor {
             line,
             index,
             affinity,
+            color: None,
+        }
+    }
+    /// Create a new cursor, specifying the color
+    pub const fn new_with_color(line: usize, index: usize, color: Color) -> Self {
+        Self {
+            line,
+            index,
+            affinity: Affinity::Before,
+            color: Some(color),
         }
     }
 }
@@ -83,6 +93,7 @@ impl Default for Affinity {
 }
 
 /// The position of a cursor within a [`Buffer`].
+#[derive(Debug)]
 pub struct LayoutCursor {
     pub line: usize,
     pub layout: usize,
@@ -100,6 +111,7 @@ impl LayoutCursor {
 }
 
 /// A line of visible text for rendering
+#[derive(Debug)]
 pub struct LayoutRun<'a> {
     /// The index of the original text line
     pub line_i: usize,
@@ -109,9 +121,11 @@ pub struct LayoutRun<'a> {
     pub rtl: bool,
     /// The array of layout glyphs to draw
     pub glyphs: &'a [LayoutGlyph],
-    /// Y offset of line
+    /// Y offset to baseline of line
     pub line_y: f32,
-    /// width of line
+    /// Y offset to top of line
+    pub line_top: f32,
+    /// Width of line
     pub line_w: f32,
 }
 
@@ -172,12 +186,12 @@ impl<'a> LayoutRun<'a> {
 }
 
 /// An iterator of visible text lines, see [`LayoutRun`]
+#[derive(Debug)]
 pub struct LayoutRunIter<'b> {
     buffer: &'b Buffer,
     line_i: usize,
     layout_i: usize,
     remaining_len: usize,
-    line_y: f32,
     total_layout: i32,
 }
 
@@ -212,7 +226,6 @@ impl<'b> LayoutRunIter<'b> {
             line_i: 0,
             layout_i: 0,
             remaining_len: bottom_cropped_layout_lines,
-            line_y: buffer.metrics.y_offset(),
             total_layout: 0,
         }
     }
@@ -238,19 +251,30 @@ impl<'b> Iterator for LayoutRunIter<'b> {
                     continue;
                 }
 
-                self.line_y += self.buffer.metrics.line_height;
-                if self.line_y - self.buffer.metrics.y_offset() > self.buffer.height {
+                let line_top = self
+                    .total_layout
+                    .saturating_sub(self.buffer.scroll)
+                    .saturating_sub(1) as f32
+                    * self.buffer.metrics.line_height;
+                let glyph_height = layout_line.max_ascent + layout_line.max_descent;
+                let centering_offset = (self.buffer.metrics.line_height - glyph_height) / 2.0;
+                let line_y = line_top + centering_offset + layout_line.max_ascent;
+
+                if line_top + centering_offset > self.buffer.height {
                     return None;
                 }
 
-                self.remaining_len -= 1;
-                return Some(LayoutRun {
-                    line_i: self.line_i,
-                    text: line.text(),
-                    rtl: shape.rtl,
-                    glyphs: &layout_line.glyphs,
-                    line_y: self.line_y,
-                    line_w: layout_line.w,
+                return self.remaining_len.checked_sub(1).map(|num| {
+                    self.remaining_len = num;
+                    LayoutRun {
+                        line_i: self.line_i,
+                        text: line.text(),
+                        rtl: shape.rtl,
+                        glyphs: &layout_line.glyphs,
+                        line_y,
+                        line_top,
+                        line_w: layout_line.w,
+                    }
                 });
             }
             self.line_i += 1;
@@ -286,10 +310,6 @@ impl Metrics {
             line_height: self.line_height * scale,
         }
     }
-
-    fn y_offset(&self) -> f32 {
-        self.font_size - self.line_height
-    }
 }
 
 impl fmt::Display for Metrics {
@@ -299,6 +319,7 @@ impl fmt::Display for Metrics {
 }
 
 /// A buffer of text that is shaped and laid out
+#[derive(Debug)]
 pub struct Buffer {
     /// [BufferLine]s (or paragraphs) of text in the buffer
     pub lines: Vec<BufferLine>,
@@ -309,18 +330,26 @@ pub struct Buffer {
     /// True if a redraw is requires. Set to false after processing
     redraw: bool,
     wrap: Wrap,
+
+    /// Scratch buffer for shaping and laying out.
+    scratch: ShapeBuffer,
 }
 
 impl Buffer {
-    /// Create a new [`Buffer`] with the provided [`FontSystem`] and [`Metrics`]
+    /// Create an empty [`Buffer`] with the provided [`Metrics`].
+    /// This is useful for initializing a [`Buffer`] without a [`FontSystem`].
+    ///
+    /// You must populate the [`Buffer`] with at least one [`BufferLine`] before shaping and layout,
+    /// for example by calling [`Buffer::set_text`].
+    ///
+    /// If you have a [`FontSystem`] in scope, you should use [`Buffer::new`] instead.
     ///
     /// # Panics
     ///
     /// Will panic if `metrics.line_height` is zero.
-    pub fn new(font_system: &mut FontSystem, metrics: Metrics) -> Self {
+    pub fn new_empty(metrics: Metrics) -> Self {
         assert_ne!(metrics.line_height, 0.0, "line height cannot be 0");
-
-        let mut buffer = Self {
+        Self {
             lines: Vec::new(),
             metrics,
             width: 0.0,
@@ -328,8 +357,18 @@ impl Buffer {
             scroll: 0,
             redraw: false,
             wrap: Wrap::Word,
-        };
-        buffer.set_text(font_system, "", Attrs::new());
+            scratch: ShapeBuffer::default(),
+        }
+    }
+
+    /// Create a new [`Buffer`] with the provided [`FontSystem`] and [`Metrics`]
+    ///
+    /// # Panics
+    ///
+    /// Will panic if `metrics.line_height` is zero.
+    pub fn new(font_system: &mut FontSystem, metrics: Metrics) -> Self {
+        let mut buffer = Self::new_empty(metrics);
+        buffer.set_text(font_system, "", Attrs::new(), Shaping::Advanced);
         buffer
     }
 
@@ -376,7 +415,13 @@ impl Buffer {
             if line.shape_opt().is_none() {
                 reshaped += 1;
             }
-            let layout = line.layout(font_system, self.metrics.font_size, self.width, self.wrap);
+            let layout = line.layout_in_buffer(
+                &mut self.scratch,
+                font_system,
+                self.metrics.font_size,
+                self.width,
+                self.wrap,
+            );
             total_layout += layout.len() as i32;
         }
 
@@ -404,7 +449,13 @@ impl Buffer {
             if line.shape_opt().is_none() {
                 reshaped += 1;
             }
-            let layout = line.layout(font_system, self.metrics.font_size, self.width, self.wrap);
+            let layout = line.layout_in_buffer(
+                &mut self.scratch,
+                font_system,
+                self.metrics.font_size,
+                self.width,
+                self.wrap,
+            );
             if line_i == cursor.line {
                 let layout_cursor = self.layout_cursor(&cursor);
                 layout_i += layout_cursor.layout as i32;
@@ -560,16 +611,111 @@ impl Buffer {
     }
 
     /// Set text of buffer, using provided attributes for each line by default
-    pub fn set_text(&mut self, font_system: &mut FontSystem, text: &str, attrs: Attrs) {
+    pub fn set_text(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        attrs: Attrs,
+        shaping: Shaping,
+    ) {
+        self.set_rich_text(font_system, [(text, attrs)], shaping);
+    }
+
+    /// Set text of buffer, using an iterator of styled spans (pairs of text and attributes)
+    ///
+    /// ```
+    /// # use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+    /// # let mut font_system = FontSystem::new();
+    /// let mut buffer = Buffer::new_empty(Metrics::new(32.0, 44.0));
+    /// let attrs = Attrs::new().family(Family::Serif);
+    /// buffer.set_rich_text(
+    ///     &mut font_system,
+    ///     [
+    ///         ("hello, ", attrs),
+    ///         ("cosmic\ntext", attrs.family(Family::Monospace)),
+    ///     ],
+    ///     Shaping::Advanced,
+    /// );
+    /// ```
+    pub fn set_rich_text<'r, 's, I>(
+        &mut self,
+        font_system: &mut FontSystem,
+        spans: I,
+        shaping: Shaping,
+    ) where
+        I: IntoIterator<Item = (&'s str, Attrs<'r>)>,
+    {
         self.lines.clear();
-        for line in text.lines() {
-            self.lines
-                .push(BufferLine::new(line.to_string(), AttrsList::new(attrs)));
-        }
-        // Make sure there is always one line
-        if self.lines.is_empty() {
-            self.lines
-                .push(BufferLine::new(String::new(), AttrsList::new(attrs)));
+
+        let mut attrs_list = AttrsList::new(Attrs::new());
+        let mut line_string = String::new();
+        let mut end = 0;
+        let (string, spans_data): (String, Vec<_>) = spans
+            .into_iter()
+            .map(|(s, attrs)| {
+                let start = end;
+                end += s.len();
+                (s, (attrs, start..end))
+            })
+            .unzip();
+
+        let mut spans_iter = spans_data.into_iter();
+        let mut maybe_span = spans_iter.next();
+
+        // split the string into lines, as ranges
+        let string_start = string.as_ptr() as usize;
+        let mut lines_iter = BidiParagraphs::new(&string).map(|line: &str| {
+            let start = line.as_ptr() as usize - string_start;
+            let end = start + line.len();
+            start..end
+        });
+        let mut maybe_line = lines_iter.next();
+
+        loop {
+            let (Some(line_range), Some((attrs, span_range))) = (&maybe_line, &maybe_span) else {
+                // this is reached only if this text is empty
+                self.lines.push(BufferLine::new(
+                    String::new(),
+                    AttrsList::new(Attrs::new()),
+                    shaping,
+                ));
+                break;
+            };
+
+            // start..end is the intersection of this line and this span
+            let start = line_range.start.max(span_range.start);
+            let end = line_range.end.min(span_range.end);
+            if start < end {
+                let text = &string[start..end];
+                let text_start = line_string.len();
+                line_string.push_str(text);
+                let text_end = line_string.len();
+                attrs_list.add_span(text_start..text_end, *attrs);
+            }
+
+            // we know that at the end of a line,
+            // span text's end index is always >= line text's end index
+            // so if this span ends before this line ends,
+            // there is another span in this line.
+            // otherwise, we move on to the next line.
+            if span_range.end < line_range.end {
+                maybe_span = spans_iter.next();
+            } else {
+                maybe_line = lines_iter.next();
+                if maybe_line.is_some() {
+                    // finalize this line and start a new line
+                    let prev_attrs_list =
+                        core::mem::replace(&mut attrs_list, AttrsList::new(Attrs::new()));
+                    let prev_line_string = core::mem::take(&mut line_string);
+                    let buffer_line = BufferLine::new(prev_line_string, prev_attrs_list, shaping);
+                    self.lines.push(buffer_line);
+                } else {
+                    // finalize the final line
+                    let buffer_line = BufferLine::new(line_string, attrs_list, shaping);
+                    self.lines.push(buffer_line);
+                    break;
+                }
+            }
         }
 
         self.scroll = 0;
@@ -706,16 +852,27 @@ impl Buffer {
     {
         for run in self.layout_runs() {
             for glyph in run.glyphs.iter() {
-                let (cache_key, x_int, y_int) = (glyph.cache_key, glyph.x_int, glyph.y_int);
+                let physical_glyph = glyph.physical((0., 0.), 1.0);
 
                 let glyph_color = match glyph.color_opt {
                     Some(some) => some,
                     None => color,
                 };
 
-                cache.with_pixels(font_system, cache_key, glyph_color, |x, y, color| {
-                    f(x_int + x, run.line_y as i32 + y_int + y, 1, 1, color);
-                });
+                cache.with_pixels(
+                    font_system,
+                    physical_glyph.cache_key,
+                    glyph_color,
+                    |x, y, color| {
+                        f(
+                            physical_glyph.x + x,
+                            run.line_y as i32 + physical_glyph.y + y,
+                            1,
+                            1,
+                            color,
+                        );
+                    },
+                );
             }
         }
     }
@@ -767,8 +924,31 @@ impl<'a> BorrowedWithFontSystem<'a, Buffer> {
     }
 
     /// Set text of buffer, using provided attributes for each line by default
-    pub fn set_text(&mut self, text: &str, attrs: Attrs) {
-        self.inner.set_text(self.font_system, text, attrs);
+    pub fn set_text(&mut self, text: &str, attrs: Attrs, shaping: Shaping) {
+        self.inner.set_text(self.font_system, text, attrs, shaping);
+    }
+
+    /// Set text of buffer, using an iterator of styled spans (pairs of text and attributes)
+    ///
+    /// ```
+    /// # use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+    /// # let mut font_system = FontSystem::new();
+    /// let mut buffer = Buffer::new_empty(Metrics::new(32.0, 44.0));
+    /// let mut buffer = buffer.borrow_with(&mut font_system);
+    /// let attrs = Attrs::new().family(Family::Serif);
+    /// buffer.set_rich_text(
+    ///     [
+    ///         ("hello, ", attrs),
+    ///         ("cosmic\ntext", attrs.family(Family::Monospace)),
+    ///     ],
+    ///     Shaping::Advanced,
+    /// );
+    /// ```
+    pub fn set_rich_text<'r, 's, I>(&mut self, spans: I, shaping: Shaping)
+    where
+        I: IntoIterator<Item = (&'s str, Attrs<'r>)>,
+    {
+        self.inner.set_rich_text(self.font_system, spans, shaping);
     }
 
     /// Draw the buffer

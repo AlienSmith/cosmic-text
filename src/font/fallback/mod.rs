@@ -26,6 +26,11 @@ mod platform;
 #[path = "windows.rs"]
 mod platform;
 
+#[cfg(not(feature = "warn_on_missing_glyphs"))]
+use log::debug as missing_warn;
+#[cfg(feature = "warn_on_missing_glyphs")]
+use log::warn as missing_warn;
+
 pub struct FontInfo {
     pub font: Arc<Font>,
     pub need_embolden: bool,
@@ -36,7 +41,7 @@ pub struct FontFallbackIter<'a> {
     font_ids: &'a [VagueFontMatchResult],
     default_families: &'a [&'a Family<'a>],
     default_i: usize,
-    scripts: Vec<Script>,
+    scripts: &'a [Script],
     script_i: (usize, usize),
     common_i: usize,
     other_i: usize,
@@ -48,7 +53,7 @@ impl<'a> FontFallbackIter<'a> {
         font_system: &'a mut FontSystem,
         font_ids: &'a [VagueFontMatchResult],
         default_families: &'a [&'a Family<'a>],
-        scripts: Vec<Script>,
+        scripts: &'a [Script],
     ) -> Self {
         Self {
             font_system,
@@ -65,14 +70,14 @@ impl<'a> FontFallbackIter<'a> {
 
     pub fn check_missing(&mut self, word: &str) {
         if self.end {
-            log::debug!(
+            missing_warn!(
                 "Failed to find any fallback for {:?} locale '{}': '{}'",
                 self.scripts,
                 self.font_system.locale(),
                 word
             );
         } else if self.other_i > 0 {
-            log::debug!(
+            missing_warn!(
                 "Failed to find preset fallback for {:?} locale '{}', used '{}': '{}'",
                 self.scripts,
                 self.font_system.locale(),
@@ -81,7 +86,7 @@ impl<'a> FontFallbackIter<'a> {
             );
         } else if !self.scripts.is_empty() && self.common_i > 0 {
             let family = common_fallback()[self.common_i - 1];
-            log::debug!(
+            missing_warn!(
                 "Failed to find script fallback for {:?} locale '{}', used '{}': '{}'",
                 self.scripts,
                 self.font_system.locale(),
@@ -117,6 +122,7 @@ impl<'a> Iterator for FontFallbackIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while self.default_i < self.default_families.len() {
             self.default_i += 1;
+            let mut monospace_fallback = None;
             for id in self.font_ids.iter() {
                 let default_family = self
                     .font_system
@@ -129,6 +135,22 @@ impl<'a> Iterator for FontFallbackIter<'a> {
                             need_embolden: id.need_embolden,
                         });
                     }
+                }
+                // Set a monospace fallback if Monospace family is not found
+                if self.default_families[self.default_i - 1] == &Family::Monospace
+                    && self.font_system.db().face(id.id).map(|f| f.monospaced) == Some(true)
+                    && monospace_fallback.is_none()
+                {
+                    monospace_fallback = Some(id);
+                }
+            }
+            // If default family is Monospace fallback to first monospaced font
+            if let Some(id) = monospace_fallback {
+                if let Some(font) = self.font_system.get_font(id.id) {
+                    return Some(FontInfo {
+                            font,
+                            need_embolden: id.need_embolden,
+                        });
                 }
             }
         }

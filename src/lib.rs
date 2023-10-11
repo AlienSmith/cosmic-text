@@ -12,7 +12,7 @@
 //! point, you can use the `SwashCache` to rasterize glyphs into either images or pixels.
 //!
 //! ```
-//! use cosmic_text::{Attrs, Color, FontSystem, SwashCache, Buffer, Metrics};
+//! use cosmic_text::{Attrs, Color, FontSystem, SwashCache, Buffer, Metrics, Shaping};
 //!
 //! // A FontSystem provides access to detected system fonts, create one per application
 //! let mut font_system = FontSystem::new();
@@ -36,7 +36,7 @@
 //! let attrs = Attrs::new();
 //!
 //! // Add some text!
-//! buffer.set_text("Hello, Rust! 🦀\n", attrs);
+//! buffer.set_text("Hello, Rust! 🦀\n", attrs, Shaping::Advanced);
 //!
 //! // Perform shaping as desired
 //! buffer.shape_until_scroll();
@@ -71,6 +71,8 @@
 #![deny(clippy::cast_ptr_alignment)]
 // Avoid panicking in without information about the panic. Use expect
 #![deny(clippy::unwrap_used)]
+// Ensure all types have a debug impl
+#![deny(missing_debug_implementations)]
 // This is usually a serious issue - a missing import of a define where it is interpreted
 // as a catch-all variable in a match, for example
 #![deny(unreachable_patterns)]
@@ -89,11 +91,16 @@
 // Ensure numbers are readable
 #![warn(clippy::unreadable_literal)]
 #![cfg_attr(not(feature = "std"), no_std)]
-
 extern crate alloc;
+
+#[cfg(not(any(feature = "std", feature = "no_std")))]
+compile_error!("Either the `std` or `no_std` feature must be enabled");
 
 pub use self::attrs::*;
 mod attrs;
+
+pub use self::bidi_para::*;
+mod bidi_para;
 
 pub use self::buffer::*;
 mod buffer;

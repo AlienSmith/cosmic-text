@@ -1,9 +1,10 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::String, vec::Vec};
 
-use crate::{Align, AttrsList, FontSystem, LayoutLine, ShapeLine, Wrap};
+use crate::{Align, AttrsList, FontSystem, LayoutLine, ShapeBuffer, ShapeLine, Shaping, Wrap};
 
 /// A line (or paragraph) of text that is shaped and laid out
+#[derive(Debug)]
 pub struct BufferLine {
     //TODO: make this not pub(crate)
     text: String,
@@ -12,13 +13,14 @@ pub struct BufferLine {
     align: Option<Align>,
     shape_opt: Option<ShapeLine>,
     layout_opt: Option<Vec<LayoutLine>>,
+    shaping: Shaping,
 }
 
 impl BufferLine {
     /// Create a new line with the given text and attributes list
     /// Cached shaping and layout can be done using the [`Self::shape`] and
     /// [`Self::layout`] functions
-    pub fn new<T: Into<String>>(text: T, attrs_list: AttrsList) -> Self {
+    pub fn new<T: Into<String>>(text: T, attrs_list: AttrsList, shaping: Shaping) -> Self {
         Self {
             text: text.into(),
             attrs_list,
@@ -26,6 +28,7 @@ impl BufferLine {
             align: None,
             shape_opt: None,
             layout_opt: None,
+            shaping,
         }
     }
 
@@ -38,13 +41,11 @@ impl BufferLine {
     ///
     /// Will reset shape and layout if it differs from current text and attributes list.
     /// Returns true if the line was reset
-    pub fn set_text<T: AsRef<str> + Into<String>>(
-        &mut self,
-        text: T,
-        attrs_list: AttrsList,
-    ) -> bool {
-        if text.as_ref() != self.text || attrs_list != self.attrs_list {
-            self.text = text.into();
+    pub fn set_text<T: AsRef<str>>(&mut self, text: T, attrs_list: AttrsList) -> bool {
+        let text = text.as_ref();
+        if text != self.text || attrs_list != self.attrs_list {
+            self.text.clear();
+            self.text.push_str(text);
             self.attrs_list = attrs_list;
             self.reset();
             true
@@ -103,7 +104,7 @@ impl BufferLine {
 
     /// Set the text alignment
     ///
-    /// Will reset shape and layout if it differs from current alignment.
+    /// Will reset layout if it differs from current alignment.
     /// Setting to None will use `Align::Right` for RTL lines, and `Align::Left` for LTR lines.
     /// Returns true if the line was reset
     pub fn set_align(&mut self, align: Option<Align>) -> bool {
@@ -144,7 +145,7 @@ impl BufferLine {
         let attrs_list = self.attrs_list.split_off(index);
         self.reset();
 
-        let mut new = Self::new(text, attrs_list);
+        let mut new = Self::new(text, attrs_list, self.shaping);
         new.wrap = self.wrap;
         new
     }
@@ -168,8 +169,23 @@ impl BufferLine {
 
     /// Shape line, will cache results
     pub fn shape(&mut self, font_system: &mut FontSystem) -> &ShapeLine {
+        self.shape_in_buffer(&mut ShapeBuffer::default(), font_system)
+    }
+
+    /// Shape a line using a pre-existing shape buffer.
+    pub fn shape_in_buffer(
+        &mut self,
+        scratch: &mut ShapeBuffer,
+        font_system: &mut FontSystem,
+    ) -> &ShapeLine {
         if self.shape_opt.is_none() {
-            self.shape_opt = Some(ShapeLine::new(font_system, &self.text, &self.attrs_list));
+            self.shape_opt = Some(ShapeLine::new_in_buffer(
+                scratch,
+                font_system,
+                &self.text,
+                &self.attrs_list,
+                self.shaping,
+            ));
             self.layout_opt = None;
         }
         self.shape_opt.as_ref().expect("shape not found")
@@ -193,6 +209,26 @@ impl BufferLine {
             let align = self.align;
             let shape = self.shape(font_system);
             let layout = shape.layout(font_size, width, wrap, align);
+            self.layout_opt = Some(layout);
+        }
+        self.layout_opt.as_ref().expect("layout not found")
+    }
+
+    /// Layout a line using a pre-existing shape buffer.
+    pub fn layout_in_buffer(
+        &mut self,
+        scratch: &mut ShapeBuffer,
+        font_system: &mut FontSystem,
+        font_size: f32,
+        width: f32,
+        wrap: Wrap,
+    ) -> &[LayoutLine] {
+        if self.layout_opt.is_none() {
+            self.wrap = wrap;
+            let align = self.align;
+            let shape = self.shape_in_buffer(scratch, font_system);
+            let mut layout = Vec::with_capacity(1);
+            shape.layout_to_buffer(scratch, font_size, width, wrap, align, &mut layout);
             self.layout_opt = Some(layout);
         }
         self.layout_opt.as_ref().expect("layout not found")
